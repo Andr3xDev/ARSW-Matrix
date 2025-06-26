@@ -62,14 +62,14 @@ To run a game on a 15x10 board with 5 cops, 3 phones, and 10 blocks:
 java edu.arsw.matrix.MatrixApplication 15 10 5 3 10
 ```
 
-### Overview cops winning:
+### Overview Tieft winning:
 
 ![c1](docs/P1.png)
 
 ![p2](docs/P2.png)
 
 
-### Overview cops winning:
+### Overview Cops winning:
 
 ![t1](docs/T1.png)
 
