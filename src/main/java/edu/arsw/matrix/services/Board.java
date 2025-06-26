@@ -1,5 +1,6 @@
 package edu.arsw.matrix.services;
 
+import edu.arsw.matrix.Game;
 import edu.arsw.matrix.models.*;
 import java.awt.Point;
 import java.util.ArrayList;
@@ -10,98 +11,84 @@ public class Board {
     private final int sizeX;
     private final int sizeY;
     private final Unit[][] grid;
+    private final Game game; // Needs a reference to the game to stop it.
 
-    // ... El constructor y el método create() se mantienen igual que en la versión
-    // anterior ...
-    public Board(int sizeX, int sizeY, int copsNum, int phoneNum, int blocks) {
+    public Board(int sizeX, int sizeY, int copsNum, int phoneNum, int blocks, Game game) {
         this.sizeX = sizeX;
         this.sizeY = sizeY;
-        this.grid = create(sizeX, sizeY, copsNum, phoneNum, blocks);
+        this.game = game;
+        this.grid = new Unit[sizeY][sizeX];
+        create(copsNum, phoneNum, blocks);
     }
 
-    private Unit[][] create(int sizeX, int sizeY, int copsNum, int phoneNum, int blocks) {
+    private void create(int copsNum, int phoneNum, int blocks) {
         int totalEntities = copsNum + phoneNum + blocks + 1;
-        if (totalEntities > sizeX * sizeY) {
-            throw new IllegalArgumentException("Too many entities for the given board size.");
-        }
-        Unit[][] newBoard = new Unit[sizeY][sizeX];
+        if (totalEntities > sizeX * sizeY)
+            throw new IllegalArgumentException("Too many entities.");
+
         List<Point> coords = new ArrayList<>();
         for (int y = 0; y < sizeY; y++)
             for (int x = 0; x < sizeX; x++)
                 coords.add(new Point(x, y));
         Collections.shuffle(coords);
+
         int index = 0;
         Point pos;
+
         pos = coords.get(index++);
-        newBoard[pos.y][pos.x] = new Thief(pos.x, pos.y);
+        grid[pos.y][pos.x] = new Thief(pos.x, pos.y, game);
         for (int i = 0; i < copsNum; i++) {
             pos = coords.get(index++);
-            newBoard[pos.y][pos.x] = new Cop(pos.x, pos.y);
+            grid[pos.y][pos.x] = new Cop(pos.x, pos.y, game);
         }
         for (int i = 0; i < phoneNum; i++) {
             pos = coords.get(index++);
-            newBoard[pos.y][pos.x] = new Phone(pos.x, pos.y);
+            grid[pos.y][pos.x] = new Phone(pos.x, pos.y, game);
         }
         for (int i = 0; i < blocks; i++) {
             pos = coords.get(index++);
-            newBoard[pos.y][pos.x] = new Block(pos.x, pos.y);
+            grid[pos.y][pos.x] = new Block(pos.x, pos.y, game);
         }
-        return newBoard;
     }
 
     /**
-     * Applies a list of planned moves and detects game-ending collisions.
-     * This is the synchronized point where the game state is safely modified.
-     * 
-     * @param moves The list of moves planned for this turn.
-     * @return The new GameState after applying the moves.
+     * A synchronized method for units to request a move.
+     * This is the critical section that controls all state changes.
      */
-    public synchronized GameState applyMoves(List<Move> moves) {
-        for (Move move : moves) {
-            Unit unit = move.unit();
-            int newX = move.newX();
-            int newY = move.newY();
+    public synchronized void requestMove(Move move) {
+        if (!game.isRunning())
+            return;
 
-            // Ignorar si la unidad ya fue eliminada (ej. el ladrón fue capturado)
-            if (grid[unit.getY()][unit.getX()] != unit)
-                continue;
+        Unit unit = move.unit();
+        int newX = move.newX();
+        int newY = move.newY();
 
-            // Validar que el movimiento esté dentro de los límites
-            if (newX < 0 || newX >= sizeX || newY < 0 || newY >= sizeY)
-                continue;
+        if (grid[unit.getY()][unit.getX()] != unit)
+            return;
+        if (newX < 0 || newX >= sizeX || newY < 0 || newY >= sizeY)
+            return;
 
-            Unit targetUnit = grid[newY][newX];
+        Unit targetUnit = grid[newY][newX];
 
-            // --- LÓGICA DE INTERACCIÓN ---
-
-            // Condición de Victoria del Ladrón
-            if (unit instanceof Thief && targetUnit instanceof Phone) {
-                // Mover el ladrón a la nueva casilla (opcional, el juego termina)
-                grid[unit.getY()][unit.getX()] = null;
-                grid[newY][newX] = unit;
-                return GameState.THIEF_WINS;
-            }
-
-            // Condición de Victoria de la Policía
-            if (unit instanceof Cop && targetUnit instanceof Thief) {
-                // El policía se mueve y captura al ladrón
-                grid[unit.getY()][unit.getX()] = null; // Vaciar la celda vieja del policía
-                grid[newY][newX] = unit; // Mover al policía a la celda del ladrón
-                return GameState.COPS_WIN;
-            }
-
-            // Movimiento normal a una casilla vacía
-            if (targetUnit == null) {
-                grid[unit.getY()][unit.getX()] = null;
-                unit.setX(newX);
-                unit.setY(newY);
-                grid[newY][newX] = unit;
-            }
+        if (unit instanceof Thief && targetUnit instanceof Phone) {
+            game.endGame("The thief reached a phone and escaped!");
+            return;
         }
-        return GameState.RUNNING; // Si no ocurrió ningún evento, el juego continúa.
+
+        if (unit instanceof Cop && targetUnit instanceof Thief) {
+            game.endGame("The cops caught the thief!");
+            return;
+        }
+
+        if (targetUnit == null) {
+            grid[unit.getY()][unit.getX()] = null;
+            unit.setX(newX);
+            unit.setY(newY);
+            grid[newY][newX] = unit;
+        }
     }
 
-    // ... findUnit, getters y printBoard se mantienen igual ...
+    // All public methods that access the grid must be synchronized
     public synchronized Unit findUnit(Class<? extends Unit> type) {
         for (int y = 0; y < sizeY; y++) {
             for (int x = 0; x < sizeX; x++) {
@@ -113,19 +100,23 @@ public class Board {
         return null;
     }
 
-    public int getSizeX() {
-        return sizeX;
+    public synchronized List<Unit> findAllUnits(Class<? extends Unit> type) {
+        List<Unit> found = new ArrayList<>();
+        for (int y = 0; y < sizeY; y++) {
+            for (int x = 0; x < sizeX; x++) {
+                if (type.isInstance(grid[y][x])) {
+                    found.add(grid[y][x]);
+                }
+            }
+        }
+        return found;
     }
 
-    public int getSizeY() {
-        return sizeY;
-    }
-
-    public Unit[][] getGrid() {
+    public synchronized Unit[][] getGrid() {
         return grid;
     }
 
-    public void printBoard() {
+    public synchronized void printBoard() {
         for (int y = 0; y < sizeY; y++) {
             for (int x = 0; x < sizeX; x++) {
                 if (grid[y][x] != null)

@@ -1,86 +1,68 @@
 package edu.arsw.matrix;
 
-import edu.arsw.matrix.models.*;
+import edu.arsw.matrix.models.Unit;
 import edu.arsw.matrix.services.Board;
-import edu.arsw.matrix.services.GameState;
-
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.*;
 
-public class Game implements Runnable {
+public class Game {
 
     private final Board board;
-    private final ExecutorService executor;
-    private volatile GameState currentState = GameState.RUNNING;
+    private volatile boolean isRunning = true; // Must be volatile
+    private final List<Thread> unitThreads = new ArrayList<>();
 
-    public Game(Board board) {
-        this.board = board;
-        this.executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    public Game(int sizeX, int sizeY, int copsNum, int phoneNum, int blocks) {
+        // The Board needs a reference to this Game instance to stop it.
+        this.board = new Board(sizeX, sizeY, copsNum, phoneNum, blocks, this);
     }
 
     public void start() {
-        new Thread(this).start();
-    }
+        System.out.println("Starting game... All units will move concurrently.");
 
-    @Override
-    public void run() {
-        while (currentState == GameState.RUNNING) {
-            try {
-                List<Callable<Move>> tasks = new ArrayList<>();
-                Unit[][] currentGrid = board.getGrid();
-
-                for (int y = 0; y < board.getSizeY(); y++) {
-                    for (int x = 0; x < board.getSizeX(); x++) {
-                        Unit unitAtCurrentPosition = currentGrid[y][x];
-
-                        if (unitAtCurrentPosition instanceof Movable) {
-                            // --- LA SOLUCIÓN ESTÁ AQUÍ ---
-                            // 1. Creamos una variable final para la unidad de ESTA iteración.
-                            // Esta variable 'movableEntity' es "efectivamente final" porque
-                            // solo se asigna una vez dentro del ámbito de este 'if'.
-                            final Movable movableEntity = (Movable) unitAtCurrentPosition;
-
-                            // 2. La lambda ahora captura 'movableEntity', no 'x' ni 'y'.
-                            // 'movableEntity' no cambia, por lo que el compilador está feliz.
-                            tasks.add(() -> movableEntity.calculateNextMove(board));
-                        }
-                    }
+        // Find all units and create a thread for each one
+        Unit[][] grid = board.getGrid(); // No need to sync, board is not yet shared
+        for (int y = 0; y < grid.length; y++) {
+            for (int x = 0; x < grid[0].length; x++) {
+                if (grid[y][x] != null) {
+                    Thread t = new Thread(grid[y][x]);
+                    unitThreads.add(t);
+                    t.start();
                 }
-
-                // El resto del código no cambia...
-                List<Future<Move>> futureMoves = executor.invokeAll(tasks);
-                List<Move> plannedMoves = new ArrayList<>();
-                for (Future<Move> f : futureMoves) {
-                    plannedMoves.add(f.get());
-                }
-
-                this.currentState = board.applyMoves(plannedMoves);
-
-                System.out.println("Game state: " + this.currentState);
-                board.printBoard();
-
-                Thread.sleep(1000);
-
-            } catch (InterruptedException | ExecutionException e) {
-                System.err.println("Game loop was interrupted.");
-                this.currentState = GameState.COPS_WIN;
-                Thread.currentThread().interrupt();
             }
         }
 
-        printFinalMessage();
-        executor.shutdownNow();
+        // A separate thread to print the board periodically
+        Thread renderer = new Thread(() -> {
+            while (isRunning) {
+                try {
+                    Thread.sleep(1000);
+                    board.printBoard();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+        renderer.start();
     }
 
-    private void printFinalMessage() {
-        System.out.println("====================");
-        System.out.println("    GAME OVER");
-        System.out.println("====================");
-        if (currentState == GameState.THIEF_WINS) {
-            System.out.println("RESULT: The thief reached a phone and escaped!");
-        } else {
-            System.out.println("RESULT: The cops caught the thief!");
+    public synchronized void endGame(String message) {
+        if (isRunning) {
+            this.isRunning = false;
+            System.out.println("====================");
+            System.out.println("    GAME OVER");
+            System.out.println("====================");
+            System.out.println("RESULT: " + message);
+
+            // Interrupt all threads to make them stop cleanly
+            unitThreads.forEach(Thread::interrupt);
         }
+    }
+
+    public boolean isRunning() {
+        return isRunning;
+    }
+
+    public Board getBoard() {
+        return board;
     }
 }
